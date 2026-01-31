@@ -2,9 +2,8 @@ import streamlit as st
 import pandas as pd
 import os
 import time
-import random
-import json
 import base64
+import json
 from datetime import datetime
 
 # ==========================================
@@ -18,6 +17,10 @@ st.set_page_config(
     initial_sidebar_state="collapsed"
 )
 
+# FILES FOR PERSISTENCE
+HISTORY_FILE = "auction_data_v3.csv"
+CONFIG_FILE = "auction_config_v3.json"
+
 TEAM_NAMES = [
     "Aditya Avengers",
     "Alfen Royals",
@@ -27,8 +30,9 @@ TEAM_NAMES = [
     "Taluka Fighters"
 ]
 
+# Default Rules
 DEFAULT_CONFIG = {
-    "purse_limit": 10000,  # Increased default based on your screenshot
+    "purse_limit": 10000,
     "max_squad_size": 25,
     "base_price": 10,
     "category_limits": {
@@ -38,91 +42,52 @@ DEFAULT_CONFIG = {
     }
 }
 
-# File to store progress automatically
-HISTORY_FILE = "auction_history_v2.csv"
-
 # ==========================================
-# 2. CSS STYLING
+# 2. PERSISTENCE FUNCTIONS (CRITICAL)
 # ==========================================
 
-st.markdown("""
-<style>
-    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;800&display=swap');
-    
-    html, body, [class*="css"] {
-        font-family: 'Inter', sans-serif;
-        background-color: #0f172a;
-        color: #e2e8f0;
-    }
-
-    .main-header {
-        font-size: 2.5rem;
-        font-weight: 900;
-        background: -webkit-linear-gradient(left, #ffffff, #94a3b8);
-        -webkit-background-clip: text;
-        -webkit-text-fill-color: transparent;
-        margin-bottom: 0;
-    }
-    
-    .projector-text {
-        text-shadow: 0 0 15px rgba(255,255,255,0.6);
-    }
-
-    .badge {
-        display: inline-block;
-        padding: 0.25em 0.6em;
-        font-size: 0.75em;
-        font-weight: 700;
-        line-height: 1;
-        text-align: center;
-        white-space: nowrap;
-        vertical-align: baseline;
-        border-radius: 0.375rem;
-    }
-    .badge-cricket { background-color: #1d4ed8; color: #dbeafe; border: 1px solid #3b82f6; }
-    .badge-badminton { background-color: #047857; color: #d1fae5; border: 1px solid #10b981; }
-    .badge-tt { background-color: #c2410c; color: #ffedd5; border: 1px solid #f97316; }
-
-    .block-container {
-        padding-top: 2rem;
-        padding-bottom: 5rem;
-    }
-    
-    #MainMenu {visibility: hidden;}
-    footer {visibility: hidden;}
-</style>
-""", unsafe_allow_html=True)
-
-# ==========================================
-# 3. HELPER FUNCTIONS
-# ==========================================
-
-def save_progress():
-    """Autosaves the current player data to a CSV so data isn't lost on refresh."""
+def save_data():
+    """Force saves the player dataframe to disk."""
     if 'players' in st.session_state and not st.session_state.players.empty:
         st.session_state.players.to_csv(HISTORY_FILE, index=False)
 
-def load_progress():
-    """Loads history if it exists."""
+def load_data_from_history():
+    """Tries to load previous session data."""
     if os.path.exists(HISTORY_FILE):
         return pd.read_csv(HISTORY_FILE)
-    return None
+    return pd.DataFrame()
+
+def save_config():
+    """Saves rules to disk."""
+    with open(CONFIG_FILE, 'w') as f:
+        json.dump(st.session_state.config, f)
+
+def load_config():
+    """Loads rules from disk."""
+    if os.path.exists(CONFIG_FILE):
+        with open(CONFIG_FILE, 'r') as f:
+            return json.load(f)
+    return DEFAULT_CONFIG
+
+# ==========================================
+# 3. INITIALIZATION
+# ==========================================
 
 def init_session_state():
+    # 1. Load Config
+    if 'config' not in st.session_state:
+        st.session_state.config = load_config()
+
+    # 2. Load Data
     if 'players' not in st.session_state:
-        # Try to load previous session history first
-        history = load_progress()
-        if history is not None:
+        history = load_data_from_history()
+        if not history.empty:
             st.session_state.players = history
-            st.toast("🔄 Restored previous auction progress!", icon="💾")
         else:
             st.session_state.players = pd.DataFrame(columns=[
                 'ID', 'Name', 'Team', 'Price', 'Cricket', 'Badminton', 'TT', 'CaptainFor', 'ContactNo'
             ])
-    
-    if 'config' not in st.session_state:
-        st.session_state.config = DEFAULT_CONFIG
-        
+            
     if 'activity_log' not in st.session_state:
         st.session_state.activity_log = []
         
@@ -132,41 +97,39 @@ def init_session_state():
     if 'admin_mode' not in st.session_state:
         st.session_state.admin_mode = False
 
-def load_data(uploaded_file):
+# ==========================================
+# 4. DATA PROCESSING
+# ==========================================
+
+def process_uploaded_file(uploaded_file):
     if uploaded_file is not None:
         try:
             df = pd.read_csv(uploaded_file)
             
-            # 1. Clean Headers
+            # Cleaning Headers
             df.columns = df.columns.str.strip()
             
-            # 2. Intelligent Renaming
+            # Intelligent Renaming
+            rename_map = {}
             for col in df.columns:
-                clean_col = col.lower().replace(' ', '')
-                if clean_col in ['playername', 'player', 'name']:
-                    df.rename(columns={col: 'Name'}, inplace=True)
-                elif 'cric' in clean_col or 'batting' in clean_col:
-                    df.rename(columns={col: 'Cricket'}, inplace=True)
-                elif 'bad' in clean_col or 'shuttle' in clean_col:
-                    df.rename(columns={col: 'Badminton'}, inplace=True)
-                elif 'table' in clean_col or 'tt' in clean_col:
-                    df.rename(columns={col: 'TT'}, inplace=True)
-                elif 'mobile' in clean_col or 'contact' in clean_col:
-                    df.rename(columns={col: 'ContactNo'}, inplace=True)
-
-            # 3. Add Missing Columns
-            if 'ID' not in df.columns:
-                df['ID'] = range(1, len(df) + 1)
+                c = col.lower().replace(' ', '')
+                if c in ['playername', 'name', 'player']: rename_map[col] = 'Name'
+                elif 'cric' in c: rename_map[col] = 'Cricket'
+                elif 'bad' in c: rename_map[col] = 'Badminton'
+                elif 'tt' in c or 'table' in c: rename_map[col] = 'TT'
+                elif 'contact' in c: rename_map[col] = 'ContactNo'
             
+            df.rename(columns=rename_map, inplace=True)
+
+            # Add Missing Columns
+            if 'ID' not in df.columns: df['ID'] = range(1, len(df) + 1)
             for col in ['Team', 'Price', 'CaptainFor', 'ContactNo']:
-                if col not in df.columns:
-                    df[col] = None
-                    
-            # 4. Normalize Data
+                if col not in df.columns: df[col] = None
+
+            # Normalize Grades
             for sport in ['Cricket', 'Badminton', 'TT']:
                 if sport in df.columns:
                     df[sport] = df[sport].fillna('0').astype(str).str.upper().str.strip()
-                    # Keep only A, B, C. Convert others to 0
                     df[sport] = df[sport].apply(lambda x: x if x in ['A', 'B', 'C'] else '0')
                 else:
                     df[sport] = '0'
@@ -174,371 +137,323 @@ def load_data(uploaded_file):
             df['Price'] = df['Price'].fillna(0).astype(int)
 
             st.session_state.players = df
-            save_progress() # Save immediately
-            st.success(f"✅ Loaded {len(df)} players successfully!")
+            save_data() # IMMEDIATE SAVE
+            st.success(f"✅ Database Built! {len(df)} players ready.")
             time.sleep(1)
             st.rerun()
         except Exception as e:
-            st.error(f"Error parsing CSV: {e}")
+            st.error(f"Error: {e}")
 
 def get_player_image(player_name):
-    """
-    Robust Image Finder (Case Insensitive)
-    """
     base_path = "photos"
-    if not os.path.exists(base_path):
-        return None
-
-    # Get list of all files in photos folder
-    all_files = os.listdir(base_path)
+    if not os.path.exists(base_path): return None
     
-    # Clean target name
-    target_name = str(player_name).strip().lower()
+    target = str(player_name).strip().lower()
+    for f in os.listdir(base_path):
+        if os.path.splitext(f)[0].strip().lower() == target:
+            return os.path.join(base_path, f)
     
-    for filename in all_files:
-        # Remove extension and lowercase
-        file_clean = os.path.splitext(filename)[0].strip().lower()
-        
-        if file_clean == target_name:
-            return os.path.join(base_path, filename)
-            
-    # Default fallback
-    return os.path.join(base_path, "default_player.png") if os.path.exists(os.path.join(base_path, "default_player.png")) else None
+    # Fallback to default
+    default = os.path.join(base_path, "default_player.png")
+    return default if os.path.exists(default) else None
 
-def calculate_team_stats(players_df, config):
+def calculate_stats():
+    df = st.session_state.players
+    cfg = st.session_state.config
     stats = []
-    for team_name in TEAM_NAMES:
-        team_players = players_df[players_df['Team'] == team_name]
-        count = len(team_players)
-        spent = team_players['Price'].sum()
+    
+    for team in TEAM_NAMES:
+        t_rows = df[df['Team'] == team]
+        count = len(t_rows)
+        spent = t_rows['Price'].sum()
         
-        cric = team_players[team_players['Cricket'] != '0']
-        bad = team_players[team_players['Badminton'] != '0']
-        tt = team_players[team_players['TT'] != '0']
+        # Categorical Counts
+        cric = len(t_rows[t_rows['Cricket'] != '0'])
+        bad = len(t_rows[t_rows['Badminton'] != '0'])
+        tt = len(t_rows[t_rows['TT'] != '0'])
         
-        available = config['purse_limit'] - spent
-        empty_slots = max(0, config['max_squad_size'] - count)
-        reserve = empty_slots * config['base_price']
-        disposable = available - reserve
-
+        # Money Math
+        avail = cfg['purse_limit'] - spent
+        # Reserve for empty slots
+        empty = max(0, cfg['max_squad_size'] - count)
+        reserve = empty * cfg['base_price']
+        disposable = avail - reserve
+        
         stats.append({
-            "Name": team_name,
-            "Count": count,
-            "Spent": spent,
-            "Available": available,
-            "Disposable": disposable,
-            "Cricket": len(cric),
-            "Badminton": len(bad),
-            "TT": len(tt),
-            "Cric_A": len(cric[cric['Cricket'] == 'A']), "Cric_B": len(cric[cric['Cricket'] == 'B']), "Cric_C": len(cric[cric['Cricket'] == 'C']),
-            "Bad_A": len(bad[bad['Badminton'] == 'A']), "Bad_B": len(bad[bad['Badminton'] == 'B']), "Bad_C": len(bad[bad['Badminton'] == 'C']),
-            "TT_A": len(tt[tt['TT'] == 'A']), "TT_B": len(tt[tt['TT'] == 'B']), "TT_C": len(tt[tt['TT'] == 'C']),
+            "Name": team, "Count": count, "Spent": spent, 
+            "Available": avail, "Disposable": disposable,
+            "Cricket": cric, "Badminton": bad, "TT": tt,
+            # Detailed Breakdown for Fair Play
+            "Cric_A": len(t_rows[t_rows['Cricket'] == 'A']),
+            "Cric_B": len(t_rows[t_rows['Cricket'] == 'B']),
+            "Cric_C": len(t_rows[t_rows['Cricket'] == 'C']),
+            "Bad_A": len(t_rows[t_rows['Badminton'] == 'A']),
+            "Bad_B": len(t_rows[t_rows['Badminton'] == 'B']),
+            "Bad_C": len(t_rows[t_rows['Badminton'] == 'C']),
+            "TT_A": len(t_rows[t_rows['TT'] == 'A']),
+            "TT_B": len(t_rows[t_rows['TT'] == 'B']),
+            "TT_C": len(t_rows[t_rows['TT'] == 'C']),
         })
     return pd.DataFrame(stats)
 
-def check_fair_play(team_name, player_sport_grades, team_stats_df, config):
-    team_row = team_stats_df[team_stats_df['Name'] == team_name].iloc[0]
-    sports = ['Cricket', 'Badminton', 'TT']
-    
-    for sport in sports:
-        grade = player_sport_grades.get(sport)
-        if grade in ['A', 'B', 'C']:
-            limit = config['category_limits'][sport][grade]
-            col_prefix = "Cric" if sport == "Cricket" else ("Bad" if sport == "Badminton" else "TT")
-            col_name = f"{col_prefix}_{grade}"
-            current_count = team_row[col_name]
-            
-            if current_count >= limit:
-                other_teams = team_stats_df[team_stats_df['Name'] != team_name]
-                others_lagging = any(other_teams[col_name] < limit)
-                if others_lagging:
-                    return False, f"🚫 {sport} QUOTA: All teams must have {limit} Grade '{grade}' players in {sport} before you can buy more."
-    return True, ""
-
-def log_activity(type, message):
-    st.session_state.activity_log.insert(0, {
-        "id": str(time.time()),
-        "type": type,
-        "message": message,
-        "time": datetime.now().strftime("%H:%M:%S")
-    })
-    st.session_state.activity_log = st.session_state.activity_log[:50]
-
 # ==========================================
-# 4. DASHBOARD TAB (Updated)
+# 5. UI COMPONENTS
 # ==========================================
+
+# --- CSS ---
+st.markdown("""
+<style>
+    .main-header { font-size: 2.5rem; font-weight: 900; background: -webkit-linear-gradient(left, #ffffff, #94a3b8); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
+    .projector-text { text-shadow: 0 0 20px rgba(255,255,255,0.8); }
+    .badge { padding: 4px 8px; border-radius: 4px; font-weight: bold; font-size: 0.8rem; margin-right: 5px; }
+    .badge-cric { background: #1e40af; color: white; }
+    .badge-bad { background: #065f46; color: white; }
+    .badge-tt { background: #9a3412; color: white; }
+    .block-container { padding-top: 1rem; }
+    #MainMenu { visibility: hidden; }
+    footer { visibility: hidden; }
+</style>
+""", unsafe_allow_html=True)
 
 def render_dashboard():
     st.markdown('<div class="main-header">Team Standings</div>', unsafe_allow_html=True)
     
-    # --- LIVE AUCTION STATUS CARD (New Feature) ---
+    # Live Auction Card
     if st.session_state.current_player_id:
-        p_id = st.session_state.current_player_id
         try:
-            live_p = st.session_state.players[st.session_state.players['ID'] == p_id].iloc[0]
-            
-            st.markdown(f"""
-            <div style="background: linear-gradient(90deg, #b91c1c 0%, #7f1d1d 100%); padding: 15px; border-radius: 10px; margin-bottom: 20px; border: 1px solid #ef4444; display: flex; align-items: center; justify-content: space-between;">
-                <div style="display: flex; align-items: center; gap: 20px;">
-                    <span style="font-size: 2rem;">🔥</span>
-                    <div>
-                        <div style="color: #fca5a5; font-size: 0.8rem; font-weight: bold; letter-spacing: 1px;">NOW ON AUCTION</div>
-                        <div style="color: white; font-size: 1.8rem; font-weight: 800;">{live_p['Name']}</div>
-                    </div>
-                </div>
-                <div style="background: rgba(0,0,0,0.3); padding: 5px 15px; border-radius: 50px; color: white;">
-                    Base: ₹{st.session_state.config['base_price']}L
-                </div>
-            </div>
-            """, unsafe_allow_html=True)
-        except:
-            pass # Handle case where ID might be stale
+            p = st.session_state.players[st.session_state.players['ID'] == st.session_state.current_player_id].iloc[0]
+            st.info(f"🔥 **NOW ON AUCTION:** {p['Name']} (Base: {st.session_state.config['base_price']}L)")
+        except: pass
 
-    df = st.session_state.players
-    config = st.session_state.config
-    stats_df = calculate_team_stats(df, config)
+    stats = calculate_stats()
     
-    total_sold = len(df[df['Team'].notna()])
-    total_slots = len(TEAM_NAMES) * config['max_squad_size']
+    # Top Metrics
+    total_sold = stats['Count'].sum()
+    total_slots = len(TEAM_NAMES) * st.session_state.config['max_squad_size']
     remaining = total_slots - total_sold
+    highest = st.session_state.players['Price'].max()
     
-    col1, col2, col3 = st.columns(3)
-    col1.metric("Total Sold", total_sold)
-    col2.metric("Remaining Slots", remaining)
+    c1, c2, c3 = st.columns(3)
+    c1.metric("Total Sold", int(total_sold))
+    c2.metric("Remaining Slots", int(remaining))
+    c3.metric("Highest Bid", f"₹{highest}L")
     
-    sold_df = df[df['Team'].notna()]
-    highest_bid = sold_df['Price'].max() if not sold_df.empty else 0
-    col3.metric("Highest Bid", f"₹{highest_bid}L")
-    
-    st.markdown("### 📊 Leaderboard")
-    display_df = stats_df[['Name', 'Disposable', 'Count', 'Cricket', 'Badminton', 'TT']].copy()
-    display_df.columns = ['Team', 'Purse Available', 'Squad Size', '🏏 Cric', '🏸 Bad', '🏓 TT']
+    # Main Table
+    disp = stats[['Name', 'Disposable', 'Count', 'Cricket', 'Badminton', 'TT']].copy()
+    disp.columns = ['Team', 'Purse Left', 'Size', '🏏 Cric', '🏸 Bad', '🏓 TT']
     
     st.dataframe(
-        display_df.style.background_gradient(subset=['Purse Available'], cmap="Greens"),
-        use_container_width=True,
-        hide_index=True,
-        height=300
+        disp.style.background_gradient(subset=['Purse Left'], cmap="Greens"),
+        use_container_width=True, hide_index=True, height=280
     )
     
-    with st.expander("View Detailed Category Breakdown"):
-        detailed_df = stats_df[['Name', 'Cric_A', 'Cric_B', 'Cric_C', 'Bad_A', 'Bad_B', 'Bad_C', 'TT_A', 'TT_B', 'TT_C']]
-        st.dataframe(detailed_df, use_container_width=True, hide_index=True)
+    with st.expander("Detailed Category Breakdown"):
+        st.dataframe(stats, use_container_width=True)
 
-# ==========================================
-# 5. AUCTION CONSOLE
-# ==========================================
-
-def render_auction_console():
+def render_auction():
     st.markdown('<div class="main-header">Auction Console</div>', unsafe_allow_html=True)
     
-    players = st.session_state.players
-    unsold = players[players['Team'].isna()]
+    df = st.session_state.players
+    unsold = df[df['Team'].isna()]
     
     if unsold.empty:
-        st.info("Auction Complete!")
+        st.success("🎉 AUCTION COMPLETE!")
         return
 
-    # Selector
-    col_sel1, col_sel2 = st.columns([1, 3])
-    with col_sel1:
-        st.markdown("### 🎲 Selector")
-        sport_filter = st.selectbox("Sport", ["All", "Cricket", "Badminton", "TT"])
-        grade_filter = st.selectbox("Grade", ["All", "A", "B", "C"])
+    # 1. Selector
+    c1, c2 = st.columns([1, 3])
+    with c1:
+        st.markdown("### 🎲 Spin")
+        sport = st.selectbox("Sport", ["All", "Cricket", "Badminton", "TT"])
+        grade = st.selectbox("Grade", ["All", "A", "B", "C"])
         
-        if st.button("🎰 SPIN WHEEL", type="primary", use_container_width=True):
+        if st.button("🎰 SPIN", type="primary", use_container_width=True):
             pool = unsold
-            if sport_filter != "All": pool = pool[pool[sport_filter] != '0']
-            if grade_filter != "All":
-                if sport_filter == "All":
-                    pool = pool[(pool['Cricket'] == grade_filter) | (pool['Badminton'] == grade_filter) | (pool['TT'] == grade_filter)]
-                else:
-                    pool = pool[pool[sport_filter] == grade_filter]
+            if sport != "All": pool = pool[pool[sport] != '0']
+            if grade != "All":
+                if sport == "All": pool = pool[(pool['Cricket']==grade)|(pool['Badminton']==grade)|(pool['TT']==grade)]
+                else: pool = pool[pool[sport] == grade]
             
             if not pool.empty:
-                placeholder = st.empty()
-                for _ in range(10):
-                    placeholder.markdown(f"<h2 style='text-align:center; color:#64748b;'>{pool.sample(1).iloc[0]['Name']}</h2>", unsafe_allow_html=True)
-                    time.sleep(0.1)
-                selected = pool.sample(1).iloc[0]
-                st.session_state.current_player_id = selected['ID']
-                placeholder.empty()
+                sel = pool.sample(1).iloc[0]
+                st.session_state.current_player_id = sel['ID']
                 st.rerun()
             else:
-                st.warning("No players match criteria.")
+                st.warning("No players found.")
 
-    with col_sel2:
+    with c2:
         st.markdown("### 🔍 Search")
         if 'Name' in unsold.columns:
-            search_term = st.selectbox("Find Player", options=unsold['Name'].tolist(), index=None, placeholder="Type to search...")
-            if search_term:
-                player_row = unsold[unsold['Name'] == search_term].iloc[0]
-                if st.session_state.current_player_id != player_row['ID']:
-                    st.session_state.current_player_id = player_row['ID']
+            search = st.selectbox("Find", unsold['Name'].tolist(), index=None, placeholder="Type name...")
+            if search:
+                pid = unsold[unsold['Name'] == search].iloc[0]['ID']
+                if st.session_state.current_player_id != pid:
+                    st.session_state.current_player_id = pid
                     st.rerun()
-        else:
-            st.error("Data missing 'Name' column.")
 
-    st.markdown("---")
+    st.divider()
 
-    # Hero Card
+    # 2. Hero Section
     if st.session_state.current_player_id:
+        pid = st.session_state.current_player_id
+        # Reload player from fresh dataframe
         try:
-            current_p = players[players['ID'] == st.session_state.current_player_id].iloc[0]
-        except IndexError:
+            p = df[df['ID'] == pid].iloc[0]
+        except:
             st.session_state.current_player_id = None
             st.rerun()
+            return
 
-        hero_col1, hero_col2 = st.columns([1, 3])
-        with hero_col1:
-            img_path = get_player_image(current_p['Name'])
-            if img_path:
-                st.image(img_path, width=250)
-                st.caption(f"File found: {os.path.basename(img_path)}") # Debugging help
-            else:
-                st.markdown("<div style='width:200px; height:200px; background:#334155; display:flex; align-items:center; justify-content:center; border-radius:10px;'><span style='font-size:3rem;'>👤</span></div>", unsafe_allow_html=True)
-                st.caption("No image found in 'photos' folder")
-
-        with hero_col2:
-            st.markdown(f"<h1 class='projector-text' style='font-size: 3.5rem; margin:0;'>{current_p['Name']}</h1>", unsafe_allow_html=True)
-            badges_html = ""
-            if current_p['Cricket'] != '0': badges_html += f"<span class='badge badge-cricket'>CRICKET: {current_p['Cricket']}</span> "
-            if current_p['Badminton'] != '0': badges_html += f"<span class='badge badge-badminton'>BADMINTON: {current_p['Badminton']}</span> "
-            if current_p['TT'] != '0': badges_html += f"<span class='badge badge-tt'>TT: {current_p['TT']}</span> "
-            st.markdown(f"<div style='margin-top:10px; margin-bottom:20px;'>{badges_html}</div>", unsafe_allow_html=True)
-            st.metric("Base Price", f"₹{st.session_state.config['base_price']}L")
-
-        # Bidding
-        if st.session_state.admin_mode:
-            st.markdown("### 💰 Bidding Control")
-            stats_df = calculate_team_stats(players, st.session_state.config)
-            valid_teams = stats_df[stats_df['Disposable'] >= st.session_state.config['base_price']]
-            team_options = {row['Name']: f"{row['Name']} (₹{row['Disposable']}L)" for _, row in valid_teams.iterrows()}
+        hc1, hc2 = st.columns([1, 3])
+        with hc1:
+            img = get_player_image(p['Name'])
+            if img: st.image(img, width=250)
+            else: st.markdown("<h1>👤</h1>", unsafe_allow_html=True)
+        
+        with hc2:
+            st.markdown(f"<h1 class='projector-text'>{p['Name']}</h1>", unsafe_allow_html=True)
+            tags = ""
+            if p['Cricket']!='0': tags+=f"<span class='badge badge-cric'>CRIC: {p['Cricket']}</span>"
+            if p['Badminton']!='0': tags+=f"<span class='badge badge-bad'>BAD: {p['Badminton']}</span>"
+            if p['TT']!='0': tags+=f"<span class='badge badge-tt'>TT: {p['TT']}</span>"
+            st.markdown(tags, unsafe_allow_html=True)
             
-            b1, b2, b3 = st.columns([2, 1, 1])
-            with b1:
-                selected_team = st.selectbox("Winning Team", options=team_options.keys(), format_func=lambda x: team_options[x])
-            with b2:
-                sold_price = st.number_input("Sold Price", min_value=st.session_state.config['base_price'], step=5)
-            with b3:
-                st.write("")
-                st.write("")
-                if st.button("🔨 SOLD", type="primary", use_container_width=True):
-                    # Validation Logic
-                    t_stat = stats_df[stats_df['Name'] == selected_team].iloc[0]
-                    if t_stat['Count'] >= st.session_state.config['max_squad_size']:
-                        st.error("Squad Full!")
-                        return
-                    
-                    max_bid = t_stat['Disposable'] + st.session_state.config['base_price']
-                    if sold_price > max_bid:
-                        st.error(f"Insufficient Funds! Max: {max_bid}")
-                        return
+            # 3. Bidding
+            if st.session_state.admin_mode:
+                st.write("---")
+                stats = calculate_stats()
+                valid = stats[stats['Disposable'] >= st.session_state.config['base_price']]
+                opts = {r['Name']: f"{r['Name']} (₹{r['Disposable']}L)" for _, r in valid.iterrows()}
+                
+                b1, b2, b3 = st.columns([2, 1, 1])
+                with b1: win_team = st.selectbox("Team", opts.keys(), format_func=lambda x: opts[x])
+                with b2: price = st.number_input("Price", value=st.session_state.config['base_price'], step=5)
+                with b3:
+                    st.write("")
+                    st.write("")
+                    if st.button("🔨 SOLD", type="primary", use_container_width=True):
+                        # Validation
+                        t_stat = stats[stats['Name'] == win_team].iloc[0]
+                        max_bid = t_stat['Disposable'] + st.session_state.config['base_price']
                         
-                    # Fair Play
-                    p_grades = {'Cricket': current_p['Cricket'], 'Badminton': current_p['Badminton'], 'TT': current_p['TT']}
-                    fair, msg = check_fair_play(selected_team, p_grades, stats_df, st.session_state.config)
-                    if not fair:
-                        st.error(msg)
-                        return
+                        if price > max_bid:
+                            st.error(f"Funds exceeded! Max: {max_bid}")
+                        else:
+                            # Save
+                            idx = df.index[df['ID'] == pid].tolist()[0]
+                            st.session_state.players.at[idx, 'Team'] = win_team
+                            st.session_state.players.at[idx, 'Price'] = price
+                            save_data() # FORCE SAVE
+                            
+                            st.session_state.activity_log.insert(0, f"SOLD: {p['Name']} to {win_team} ({price})")
+                            st.balloons()
+                            st.session_state.current_player_id = None
+                            time.sleep(1)
+                            st.rerun()
 
-                    # Execute Sale
-                    idx = players.index[players['ID'] == st.session_state.current_player_id].tolist()[0]
-                    st.session_state.players.at[idx, 'Team'] = selected_team
-                    st.session_state.players.at[idx, 'Price'] = sold_price
-                    
-                    # SAVE STATE IMMEDIATELY
-                    save_progress()
-                    
-                    log_activity('sale', f"SOLD: **{current_p['Name']}** to {selected_team} for ₹{sold_price}L")
-                    st.balloons()
+                if st.button("Pass"):
                     st.session_state.current_player_id = None
-                    st.success("Sold & Saved!")
-                    time.sleep(1)
                     st.rerun()
-
-            if st.button("Skip / Pass"):
-                st.session_state.current_player_id = None
-                st.rerun()
-        else:
-            st.warning("Login to enable controls")
-    else:
-        st.info("Waiting for spin...")
-
-# ==========================================
-# 6. TEAMS TAB
-# ==========================================
+            else:
+                st.warning("Admin Login Required to Bid")
 
 def render_teams():
     st.markdown('<div class="main-header">Team Rosters</div>', unsafe_allow_html=True)
-    players = st.session_state.players
-    config = st.session_state.config
-    stats = calculate_team_stats(players, config)
+    df = st.session_state.players
     
-    # Last Sold Context
-    last_sales = st.session_state.activity_log[:3]
-    if last_sales:
-        st.markdown("##### 🕒 Recent Activity")
-        for log in last_sales:
-            st.caption(f"{log['time']} - {log['message']}")
-            
-    st.markdown("---")
-
-    for _, team in stats.iterrows():
-        with st.expander(f"{team['Name']} | Used: {team['Count']}/{config['max_squad_size']} | Purse: ₹{team['Disposable']}L"):
-            t_players = players[players['Team'] == team['Name']]
-            if not t_players.empty:
-                st.dataframe(t_players[['Name', 'Price', 'Cricket', 'Badminton', 'TT']], use_container_width=True, hide_index=True)
+    # Recent Activity
+    if st.session_state.activity_log:
+        st.caption("Recent Activity: " + " | ".join(st.session_state.activity_log[:3]))
+        
+    for team in TEAM_NAMES:
+        t_df = df[df['Team'] == team]
+        count = len(t_df)
+        with st.expander(f"{team} ({count})"):
+            if not t_df.empty:
+                st.dataframe(t_df[['Name', 'Price', 'Cricket', 'Badminton', 'TT', 'CaptainFor']], hide_index=True, use_container_width=True)
             else:
                 st.write("No players.")
 
-# ==========================================
-# 7. SETTINGS
-# ==========================================
-
 def render_settings():
-    st.markdown('<div class="main-header">Admin Settings</div>', unsafe_allow_html=True)
+    st.markdown('<div class="main-header">Settings</div>', unsafe_allow_html=True)
     
     if not st.session_state.admin_mode:
-        pwd = st.text_input("Password", type="password")
+        pwd = st.text_input("Admin Password", type="password")
         if st.button("Login"):
             if pwd == "ABCD2026":
                 st.session_state.admin_mode = True
                 st.rerun()
         return
 
-    tab1, tab2, tab3 = st.tabs(["Data", "Rules", "Correction"])
+    t1, t2, t3, t4 = st.tabs(["Data", "Rules", "Captains", "Correction"])
     
-    with tab1:
+    with t1:
         st.subheader("Data Management")
-        up_file = st.file_uploader("Upload Master CSV", type=['csv'])
-        if up_file: load_data(up_file)
+        up = st.file_uploader("Upload CSV", type=['csv'])
+        if up: process_uploaded_file(up)
         
-        if st.button("🗑️ Reset Auction (New Game)", type="primary"):
+        st.divider()
+        if st.button("🗑️ Factory Reset (Clear All Data)", type="primary"):
             if os.path.exists(HISTORY_FILE): os.remove(HISTORY_FILE)
             st.session_state.players = pd.DataFrame()
             st.session_state.activity_log = []
-            st.success("Reset Complete. Please upload CSV.")
+            st.success("Reset Done.")
+            time.sleep(1)
             st.rerun()
+            
+        st.divider()
+        # DOWNLOAD BUTTON
+        if not st.session_state.players.empty:
+            csv = st.session_state.players.to_csv(index=False)
+            b64 = base64.b64encode(csv.encode()).decode()
+            href = f'<a href="data:file/csv;base64,{b64}" download="final_auction_results.csv">📥 Download Final Results (CSV)</a>'
+            st.markdown(href, unsafe_allow_html=True)
 
-    with tab2:
-        st.write("Edit Config in code for safety during auction.")
-        st.json(st.session_state.config)
+    with t2:
+        st.subheader("Tournament Rules")
+        c1, c2, c3 = st.columns(3)
+        np = c1.number_input("Purse", value=st.session_state.config['purse_limit'])
+        ns = c2.number_input("Squad Size", value=st.session_state.config['max_squad_size'])
+        nb = c3.number_input("Base Price", value=st.session_state.config['base_price'])
+        
+        if st.button("💾 Save Rules"):
+            st.session_state.config['purse_limit'] = np
+            st.session_state.config['max_squad_size'] = ns
+            st.session_state.config['base_price'] = nb
+            save_config() # PERSIST CONFIG
+            st.success("Rules Saved!")
 
-    with tab3:
-        st.subheader("Undo/Fix Sale")
+    with t3:
+        st.subheader("Assign Captains")
+        unsold = st.session_state.players[st.session_state.players['Team'].isna()]
+        if not unsold.empty:
+            c_p = st.selectbox("Select Player", unsold['Name'].unique())
+            c_t = st.selectbox("Select Team", TEAM_NAMES)
+            c_s = st.selectbox("Sport Category", ["Cricket", "Badminton", "TT"])
+            c_price = st.number_input("Captain Price", 0)
+            
+            if st.button("Assign Captain"):
+                idx = st.session_state.players.index[st.session_state.players['Name'] == c_p].tolist()[0]
+                st.session_state.players.at[idx, 'Team'] = c_t
+                st.session_state.players.at[idx, 'Price'] = c_price
+                st.session_state.players.at[idx, 'CaptainFor'] = c_s
+                save_data()
+                st.success("Captain Assigned!")
+                st.rerun()
+
+    with t4:
+        st.subheader("Correction (Unsell)")
         sold = st.session_state.players[st.session_state.players['Team'].notna()]
         if not sold.empty:
-            if 'Name' in sold.columns:
-                p_fix = st.selectbox("Select Player", sold['Name'].unique())
-                if p_fix:
-                    idx = st.session_state.players.index[st.session_state.players['Name'] == p_fix].tolist()[0]
-                    if st.button("❌ Revert to Unsold"):
-                        st.session_state.players.at[idx, 'Team'] = None
-                        st.session_state.players.at[idx, 'Price'] = 0
-                        save_progress()
-                        st.success("Reverted!")
-                        st.rerun()
+            p_fix = st.selectbox("Select Sold Player", sold['Name'].unique())
+            if st.button("❌ Unsell (Revert)"):
+                idx = st.session_state.players.index[st.session_state.players['Name'] == p_fix].tolist()[0]
+                st.session_state.players.at[idx, 'Team'] = None
+                st.session_state.players.at[idx, 'Price'] = 0
+                st.session_state.players.at[idx, 'CaptainFor'] = None
+                save_data()
+                st.success("Reverted!")
+                st.rerun()
 
 # ==========================================
 # MAIN
@@ -548,25 +463,23 @@ def developer_profile():
     with st.sidebar:
         st.markdown("### 👨‍💻 Developer")
         try:
-            # Safe Search for Developer
             if 'Name' in st.session_state.players.columns:
                 dev = st.session_state.players[st.session_state.players['Name'].str.contains("Abhishek", case=False, na=False)]
                 if not dev.empty:
-                    st.success(f"Playing for: {dev.iloc[0]['Team'] if pd.notna(dev.iloc[0]['Team']) else 'Unsold'}")
-                else:
-                    st.write("Abhishek Chandaliya")
-        except:
-            pass
+                    d = dev.iloc[0]
+                    st.success(f"Abhishek Chandaliya\n\nTeam: {d['Team'] if pd.notna(d['Team']) else 'Unsold'}")
+                else: st.write("Abhishek Chandaliya")
+        except: pass
 
 def main():
     init_session_state()
     developer_profile()
     
-    tabs = st.tabs(["📊 Dashboard", "⚖️ Auction Console", "👥 Teams", "⚙️ Settings"])
-    with tabs[0]: render_dashboard()
-    with tabs[1]: render_auction_console()
-    with tabs[2]: render_teams()
-    with tabs[3]: render_settings()
+    t1, t2, t3, t4 = st.tabs(["📊 Dashboard", "⚖️ Auction", "👥 Teams", "⚙️ Settings"])
+    with t1: render_dashboard()
+    with t2: render_auction()
+    with t3: render_teams()
+    with t4: render_settings()
 
 if __name__ == "__main__":
     main()
