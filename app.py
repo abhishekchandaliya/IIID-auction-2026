@@ -753,7 +753,7 @@ def developer_profile():
         
         # Check dev stats
         dev_name = "Abhishek Chandaliya"
-        dev_data = st.session_state.players[st.session_state.players['Name'].str.contains("Abhishek", case=False, na=False)]
+        dev_data = st.session_state.players[st.session_state.players['Player Name'].str.contains("Abhishek", case=False, na=False)]
         
         status = "Unsold"
         team = "N/A"
@@ -814,4 +814,5 @@ def main():
         render_settings()
 
 if __name__ == "__main__":
+
     main()
