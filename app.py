@@ -18,8 +18,8 @@ st.set_page_config(
 )
 
 # FILES FOR PERSISTENCE
-HISTORY_FILE = "auction_data_v3.csv"
-CONFIG_FILE = "auction_config_v3.json"
+HISTORY_FILE = "auction_data_v4.csv"
+CONFIG_FILE = "auction_config_v4.json"
 
 TEAM_NAMES = [
     "Aditya Avengers",
@@ -43,7 +43,7 @@ DEFAULT_CONFIG = {
 }
 
 # ==========================================
-# 2. PERSISTENCE FUNCTIONS (CRITICAL)
+# 2. PERSISTENCE FUNCTIONS
 # ==========================================
 
 def save_data():
@@ -183,7 +183,6 @@ def calculate_stats():
             "Name": team, "Count": count, "Spent": spent, 
             "Available": avail, "Disposable": disposable,
             "Cricket": cric, "Badminton": bad, "TT": tt,
-            # Detailed Breakdown for Fair Play
             "Cric_A": len(t_rows[t_rows['Cricket'] == 'A']),
             "Cric_B": len(t_rows[t_rows['Cricket'] == 'B']),
             "Cric_C": len(t_rows[t_rows['Cricket'] == 'C']),
@@ -200,7 +199,6 @@ def calculate_stats():
 # 5. UI COMPONENTS
 # ==========================================
 
-# --- CSS ---
 st.markdown("""
 <style>
     .main-header { font-size: 2.5rem; font-weight: 900; background: -webkit-linear-gradient(left, #ffffff, #94a3b8); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
@@ -361,9 +359,17 @@ def render_teams():
     st.markdown('<div class="main-header">Team Rosters</div>', unsafe_allow_html=True)
     df = st.session_state.players
     
-    # Recent Activity
+    # Recent Activity - SAFE MODE FIXED
     if st.session_state.activity_log:
-        st.caption("Recent Activity: " + " | ".join(st.session_state.activity_log[:3]))
+        safe_logs = []
+        for log in st.session_state.activity_log[:3]:
+            # Check if log is a dictionary (from old version) or string (new version)
+            if isinstance(log, dict):
+                safe_logs.append(f"{log.get('time','')}: {log.get('message','')}")
+            else:
+                safe_logs.append(str(log))
+        
+        st.caption("Recent Activity: " + " | ".join(safe_logs))
         
     for team in TEAM_NAMES:
         t_df = df[df['Team'] == team]
