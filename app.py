@@ -4,6 +4,7 @@ import os
 import time
 import random
 import json
+import base64
 from datetime import datetime
 
 # ==========================================
@@ -149,10 +150,9 @@ def load_data(uploaded_file):
             df = pd.read_csv(uploaded_file)
             
             # Normalize columns
-            required_cols = ['Name', 'Cricket', 'Badminton', 'TT']
             # Simple mapping if CSV headers are different
             rename_map = {
-                'Player Name': 'Name', 'Player': 'Name',
+                'Player Name': 'Name', 'Player': 'Name', 'PLAYER NAME': 'Name',
                 'Cric': 'Cricket', 'Batting': 'Cricket',
                 'Bad': 'Badminton', 'Shuttle': 'Badminton',
                 'Table Tennis': 'TT',
@@ -194,7 +194,11 @@ def get_player_image(player_name):
     """
     base_path = "photos"
     if not os.path.exists(base_path):
-        os.makedirs(base_path)  # Create if it doesn't exist
+        # Create if it doesn't exist, just to prevent error
+        try:
+            os.makedirs(base_path) 
+        except:
+            pass
 
     extensions = ['.png', '.jpg', '.jpeg']
     
@@ -488,12 +492,6 @@ def render_auction_console():
                         return
                     
                     # Logic: Max Bid
-                    # If this is the last player, they can spend all available. 
-                    # If not, reserve base_price for remaining slots.
-                    # We use 'Disposable' which already accounts for reserve.
-                    # Exception: If this fills a slot, we free up that slot's reserve.
-                    # Simplified: Check if bid <= Disposable + BasePrice (the reserve for THIS slot)
-                    
                     slots_remaining = st.session_state.config['max_squad_size'] - team_stats['Count']
                     # Disposable is calculated assuming we keep reserve for ALL empty slots including this one.
                     # So actual max bid for THIS player = Disposable + Base_Price
@@ -514,8 +512,6 @@ def render_auction_console():
                     
                     if not is_fair:
                         st.error(fp_msg)
-                        # Admin Override Checkbox could be added here, 
-                        # but for simplicity in Streamlit, we block it unless we add a checkbox state.
                         return
 
                     # --- EXECUTE SALE ---
@@ -604,7 +600,7 @@ def render_settings():
         with st.form("admin_login"):
             password = st.text_input("Admin Password", type="password")
             if st.form_submit_button("Login"):
-                if password == "ABCD2026":
+                if password == "ABCD2026": # You can change this
                     st.session_state.admin_mode = True
                     st.success("Logged in!")
                     st.rerun()
@@ -753,7 +749,10 @@ def developer_profile():
         
         # Check dev stats
         dev_name = "Abhishek Chandaliya"
-        dev_data = st.session_state.players[st.session_state.players['Player Name'].str.contains("Abhishek", case=False, na=False)]
+        
+        # --- THE FIX IS HERE ---
+        # We now search in 'Name' because load_data renames 'Player Name' to 'Name'
+        dev_data = st.session_state.players[st.session_state.players['Name'].str.contains("Abhishek", case=False, na=False)]
         
         status = "Unsold"
         team = "N/A"
@@ -791,13 +790,17 @@ def developer_profile():
 # 8. MAIN APP LOGIC
 # ==========================================
 
-import base64 # Import needed for download
-
 def main():
     init_session_state()
     
-    developer_profile()
-    
+    # Safely load developer profile (wrapped in try/except just in case)
+    try:
+        developer_profile()
+    except:
+        # Fallback if data isn't loaded yet
+        with st.sidebar:
+            st.write("Developer: Abhishek Chandaliya")
+
     # Navigation
     tabs = st.tabs(["📊 Dashboard", "⚖️ Auction Console", "👥 Teams", "⚙️ Settings"])
     
@@ -814,5 +817,4 @@ def main():
         render_settings()
 
 if __name__ == "__main__":
-
     main()
