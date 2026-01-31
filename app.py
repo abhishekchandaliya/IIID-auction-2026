@@ -18,8 +18,8 @@ st.set_page_config(
 )
 
 # FILES FOR PERSISTENCE
-HISTORY_FILE = "auction_data_v4.csv"
-CONFIG_FILE = "auction_config_v4.json"
+HISTORY_FILE = "auction_data_v5.csv"
+CONFIG_FILE = "auction_config_v5.json"
 
 TEAM_NAMES = [
     "Aditya Avengers",
@@ -84,6 +84,7 @@ def init_session_state():
         if not history.empty:
             st.session_state.players = history
         else:
+            # Initialize empty DF with correct columns
             st.session_state.players = pd.DataFrame(columns=[
                 'ID', 'Name', 'Team', 'Price', 'Cricket', 'Badminton', 'TT', 'CaptainFor', 'ContactNo'
             ])
@@ -162,6 +163,9 @@ def calculate_stats():
     cfg = st.session_state.config
     stats = []
     
+    if df.empty:
+        return pd.DataFrame()
+
     for team in TEAM_NAMES:
         t_rows = df[df['Team'] == team]
         count = len(t_rows)
@@ -216,14 +220,17 @@ st.markdown("""
 def render_dashboard():
     st.markdown('<div class="main-header">Team Standings</div>', unsafe_allow_html=True)
     
+    stats = calculate_stats()
+    if stats.empty:
+        st.warning("⚠️ No data loaded. Please go to Settings > Data to upload CSV.")
+        return
+
     # Live Auction Card
     if st.session_state.current_player_id:
         try:
             p = st.session_state.players[st.session_state.players['ID'] == st.session_state.current_player_id].iloc[0]
             st.info(f"🔥 **NOW ON AUCTION:** {p['Name']} (Base: {st.session_state.config['base_price']}L)")
         except: pass
-
-    stats = calculate_stats()
     
     # Top Metrics
     total_sold = stats['Count'].sum()
@@ -252,6 +259,10 @@ def render_auction():
     st.markdown('<div class="main-header">Auction Console</div>', unsafe_allow_html=True)
     
     df = st.session_state.players
+    if df.empty:
+        st.warning("Please upload data first.")
+        return
+
     unsold = df[df['Team'].isna()]
     
     if unsold.empty:
@@ -343,7 +354,10 @@ def render_auction():
                             st.session_state.players.at[idx, 'Price'] = price
                             save_data() # FORCE SAVE
                             
-                            st.session_state.activity_log.insert(0, f"SOLD: {p['Name']} to {win_team} ({price})")
+                            # Log (String format safe)
+                            log_msg = f"SOLD: {p['Name']} to {win_team} ({price})"
+                            st.session_state.activity_log.insert(0, log_msg)
+                            
                             st.balloons()
                             st.session_state.current_player_id = None
                             time.sleep(1)
@@ -358,17 +372,17 @@ def render_auction():
 def render_teams():
     st.markdown('<div class="main-header">Team Rosters</div>', unsafe_allow_html=True)
     df = st.session_state.players
-    
-    # Recent Activity - SAFE MODE FIXED
+    if df.empty: return
+
+    # Recent Activity - SAFE MODE
     if st.session_state.activity_log:
         safe_logs = []
         for log in st.session_state.activity_log[:3]:
-            # Check if log is a dictionary (from old version) or string (new version)
+            # Convert dicts to string if old data exists
             if isinstance(log, dict):
-                safe_logs.append(f"{log.get('time','')}: {log.get('message','')}")
+                safe_logs.append(f"{log.get('message','')}")
             else:
                 safe_logs.append(str(log))
-        
         st.caption("Recent Activity: " + " | ".join(safe_logs))
         
     for team in TEAM_NAMES:
@@ -399,21 +413,23 @@ def render_settings():
         if up: process_uploaded_file(up)
         
         st.divider()
-        if st.button("🗑️ Factory Reset (Clear All Data)", type="primary"):
-            if os.path.exists(HISTORY_FILE): os.remove(HISTORY_FILE)
-            st.session_state.players = pd.DataFrame()
-            st.session_state.activity_log = []
-            st.success("Reset Done.")
-            time.sleep(1)
-            st.rerun()
-            
-        st.divider()
-        # DOWNLOAD BUTTON
-        if not st.session_state.players.empty:
-            csv = st.session_state.players.to_csv(index=False)
-            b64 = base64.b64encode(csv.encode()).decode()
-            href = f'<a href="data:file/csv;base64,{b64}" download="final_auction_results.csv">📥 Download Final Results (CSV)</a>'
-            st.markdown(href, unsafe_allow_html=True)
+        c1, c2 = st.columns(2)
+        with c1:
+            if st.button("🗑️ Nuke & Reset (Fix Errors)", type="primary"):
+                if os.path.exists(HISTORY_FILE): os.remove(HISTORY_FILE)
+                st.session_state.players = pd.DataFrame()
+                st.session_state.activity_log = []
+                st.success("Clean Slate.")
+                time.sleep(1)
+                st.rerun()
+        
+        with c2:
+            # DOWNLOAD BUTTON
+            if not st.session_state.players.empty:
+                csv = st.session_state.players.to_csv(index=False)
+                b64 = base64.b64encode(csv.encode()).decode()
+                href = f'<a href="data:file/csv;base64,{b64}" download="final_auction_results.csv">📥 Download CSV</a>'
+                st.markdown(href, unsafe_allow_html=True)
 
     with t2:
         st.subheader("Tournament Rules")
@@ -431,24 +447,29 @@ def render_settings():
 
     with t3:
         st.subheader("Assign Captains")
-        unsold = st.session_state.players[st.session_state.players['Team'].isna()]
-        if not unsold.empty:
-            c_p = st.selectbox("Select Player", unsold['Name'].unique())
-            c_t = st.selectbox("Select Team", TEAM_NAMES)
-            c_s = st.selectbox("Sport Category", ["Cricket", "Badminton", "TT"])
-            c_price = st.number_input("Captain Price", 0)
-            
-            if st.button("Assign Captain"):
-                idx = st.session_state.players.index[st.session_state.players['Name'] == c_p].tolist()[0]
-                st.session_state.players.at[idx, 'Team'] = c_t
-                st.session_state.players.at[idx, 'Price'] = c_price
-                st.session_state.players.at[idx, 'CaptainFor'] = c_s
-                save_data()
-                st.success("Captain Assigned!")
-                st.rerun()
+        if st.session_state.players.empty:
+            st.warning("No data.")
+        else:
+            unsold = st.session_state.players[st.session_state.players['Team'].isna()]
+            if not unsold.empty:
+                c_p = st.selectbox("Select Player", unsold['Name'].unique())
+                c_t = st.selectbox("Select Team", TEAM_NAMES)
+                c_s = st.selectbox("Sport Category", ["Cricket", "Badminton", "TT"])
+                c_price = st.number_input("Captain Price", 0)
+                
+                if st.button("Assign Captain"):
+                    idx = st.session_state.players.index[st.session_state.players['Name'] == c_p].tolist()[0]
+                    st.session_state.players.at[idx, 'Team'] = c_t
+                    st.session_state.players.at[idx, 'Price'] = c_price
+                    st.session_state.players.at[idx, 'CaptainFor'] = c_s
+                    save_data()
+                    st.success("Captain Assigned!")
+                    st.rerun()
 
     with t4:
         st.subheader("Correction (Unsell)")
+        if st.session_state.players.empty: return
+        
         sold = st.session_state.players[st.session_state.players['Team'].notna()]
         if not sold.empty:
             p_fix = st.selectbox("Select Sold Player", sold['Name'].unique())
